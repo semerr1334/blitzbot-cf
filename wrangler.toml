@@ -2,8 +2,13 @@ name = "blitzbot"
 main = "worker.js"
 compatibility_date = "2026-10-01"
 
-# Переменные, которые НЕ секретные. Секреты (TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET,
-# GITHUB_TOKEN) задаются в панели Cloudflare: Settings -> Variables and Secrets.
+# Эти значения переживают деплой из GitHub. Держи их здесь, а не в панели:
+# при деплое через Git обычные (не секретные) переменные из панели стираются,
+# а секреты (TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, GITHUB_TOKEN) — сохраняются.
 [vars]
 GITHUB_REPO = "semerr1334/BlitzServer1120"
 DIGEST_HOUR = "21"
+# твой id и Акима — /logs, /digest и уведомления о вопросах без ответа
+ADMIN_IDS = "6457932252,7167338117"
+# пусто = бот отвечает в любом чате; впиши id группы, чтобы закрыть на свои
+ALLOWED_CHAT_IDS = ""
