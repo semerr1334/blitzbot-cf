@@ -80,7 +80,35 @@ async function tgCall(env, method, params) {
   return r.json();
 }
 
-async function send(env, chatId, text, replyTo) {
+function menuKeyboard() {
+  return [
+    [{ text: "🗺 Карта и коллизии", callback_data: "i:map-collisions" },
+     { text: "🏅 Награды и знак", callback_data: "i:mark-mastery" }],
+    [{ text: "💥 Вылеты и фризы", callback_data: "i:hangar-freeze" },
+     { text: "📲 Установка и обновление", callback_data: "i:install" }],
+    [{ text: "🆕 Что нового", callback_data: "b:new" },
+     { text: "📋 Все темы", callback_data: "b:all" }],
+  ];
+}
+
+function whatsNewText(rel) {
+  if (!rel.tag) return "Не смог узнать версию — GitHub не ответил. Попробуй через минуту.";
+  if (!rel.body) return `Актуальная версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`;
+  // Markdown релиза -> читаемый текст: заголовки, звёздочки и ссылки убираем
+  let body = rel.body
+    .replace(/\r/g, "")
+    .replace(/^#{1,6}\s*/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/^>\s?/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (body.length > 3200) body = body.slice(0, 3190).trimEnd() + "…";
+  return `🆕 ${rel.tag}\n\n${body}`;
+}
+
+async function send(env, chatId, text, replyTo, keyboard) {
   text = (text || "").trim();
   if (!text) return;
   const parts = chunk(text);
@@ -94,6 +122,7 @@ async function send(env, chatId, text, replyTo) {
       p.reply_to_message_id = replyTo;
       p.allow_sending_without_reply = true;
     }
+    if (keyboard && i === 0) p.reply_markup = { inline_keyboard: keyboard };
     await tgCall(env, "sendMessage", p);
   }
 }
@@ -110,11 +139,12 @@ async function latestRelease(env) {
   const repo = env.GITHUB_REPO || "semerr1334/BlitzServer1120";
   const headers = { "user-agent": "BlitzBot/1.0" };
   if (env.GITHUB_TOKEN) headers.authorization = "Bearer " + env.GITHUB_TOKEN;
-  let info = { tag: "", apk: "", hotfix: "" };
+  let info = { tag: "", apk: "", hotfix: "", body: "" };
   try {
     const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers });
     const d = await r.json();
     info.tag = d.tag_name || "";
+    info.body = d.body || "";
     for (const a of d.assets || []) {
       const name = a.name || "";
       if (!info.apk && /\.apk$/i.test(name)) info.apk = a.browser_download_url;
@@ -289,7 +319,9 @@ function helpText() {
   return ("Я помощник по моду. Что умею:\n\n"
     + "/version — последнее обновление и ссылки\n"
     + "/issues — что уже починил, что в работе\n"
-    + "/id — показать id этого чата\n\n"
+    + "/id — показать id этого чата\n"
+    + "/whatsnew — что нового в последней версии\n\n"
+    + "Или выбери кнопку ниже — так быстрее всего.\n\n"
     + "Или просто напиши, что не работает: «улетаю за карту», «нет знака», "
     + "«вылетает», «как обновить» — подскажу, что делать.");
 }
@@ -302,7 +334,32 @@ async function handleMessage(env, msg) {
   const chatId = chat.id;
   const userId = user.id || 0;
   let text = (msg.text || msg.caption || "").trim();
-  if (!chatId || !text || user.is_bot) return null;
+  const hasMedia = !!(msg.photo || msg.document || msg.video);
+  if (!chatId || user.is_bot) return null;
+  if (hasMedia) {
+    // Скриншот — самое ценное, что может прислать человек. Пересылаем админам.
+    const admins = idList(env, "ADMIN_IDS");
+    for (const a of admins) {
+      try {
+        await tgCall(env, "forwardMessage", { chat_id: a, from_chat_id: chatId, message_id: msg.message_id });
+      } catch (e) {}
+    }
+    if (admins.length) {
+      const who = user.username ? "@" + user.username : (user.first_name || "кто-то");
+      for (const a of admins) {
+        try {
+          await send(env, a, `📎 Вложение от ${who} (чат ${chatId})` + (text ? `\nПодпись: ${text}` : ""));
+        } catch (e) {}
+      }
+    }
+    return {
+      text: admins.length
+        ? "Скриншот получил, передал разработчику ✅\n\nНапиши в двух словах: что случилось и на какой карте (если в бою) — так найдём быстрее."
+        : "Скриншот вижу, но пересылать пока некому. Опиши проблему словами: что делал и что случилось.",
+      replyTo: msg.message_id,
+    };
+  }
+  if (!text) return null;
 
   const allowed = idList(env, "ALLOWED_CHAT_IDS");
   if (allowed.length && !allowed.includes(chatId)) return { skip: "чужой чат" };
@@ -314,7 +371,12 @@ async function handleMessage(env, msg) {
   if (m) {
     const cmd = m[1].toLowerCase();
     const arg = (m[2] || "").trim();
-    if (["start", "help"].includes(cmd)) return { text: helpText(), replyTo: msg.message_id };
+    if (["start", "help", "menu"].includes(cmd)) {
+      return { text: helpText(), replyTo: msg.message_id, keyboard: menuKeyboard() };
+    }
+    if (["whatsnew", "new", "changelog"].includes(cmd)) {
+      return { text: whatsNewText(await latestRelease(env)), replyTo: msg.message_id };
+    }
     if (["version", "ver", "update", "apk"].includes(cmd)) {
       const rel = await latestRelease(env);
       if (!rel.tag) return { text: "Не смог узнать версию — GitHub не ответил. Попробуй через минуту." };
@@ -390,6 +452,29 @@ async function escalate(env, ev) {
   }
 }
 
+async function handleCallback(env, cq) {
+  const data = cq.data || "";
+  const chatId = ((cq.message || {}).chat || {}).id;
+  try {
+    await tgCall(env, "answerCallbackQuery", { callback_query_id: cq.id });
+  } catch (e) {}
+  if (!chatId) return;
+  try {
+    if (data.startsWith("i:")) {
+      const id = data.slice(2);
+      const issue = KB.issues.find((i) => i.id === id);
+      if (issue) await send(env, chatId, render(issue, "", await latestRelease(env)));
+      else await send(env, chatId, "Такой темы нет. Напиши, что случилось, обычными словами.");
+    } else if (data === "b:new") {
+      await send(env, chatId, whatsNewText(await latestRelease(env)));
+    } else if (data === "b:all") {
+      await send(env, chatId, knownList());
+    }
+  } catch (e) {
+    try { await send(env, chatId, "Не смог открыть этот раздел. Напиши вопрос текстом."); } catch (e2) {}
+  }
+}
+
 // ------------------------------------------------------------------ worker ---
 
 export default {
@@ -432,6 +517,11 @@ export default {
     } catch (e) {
       return new Response("bad json", { status: 400 });
     }
+    if (update.callback_query) {
+      await handleCallback(env, update.callback_query);
+      return new Response("ok");
+    }
+
     const msg = update.message || update.edited_message;
     if (!msg) return new Response("ok");
 
@@ -448,7 +538,7 @@ export default {
       return new Response("ok");
     }
     if (result && result.text) {
-      await send(env, msg.chat.id, result.text, result.replyTo);
+      await send(env, msg.chat.id, result.text, result.replyTo, result.keyboard);
     }
     if (result && result.escalate) {
       try {
