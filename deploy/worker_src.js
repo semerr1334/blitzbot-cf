@@ -431,7 +431,16 @@ async function handleMessage(env, msg) {
   let text = (msg.text || msg.caption || "").trim();
   const hasMedia = !!(msg.photo || msg.document || msg.video);
   if (!chatId || user.is_bot) return null;
+
+  const botUsername = String(env.BOT_USERNAME || "Helperprivatblitzbot").replace(/^@/, "").toLowerCase();
+  const isGroup = chat.type === "group" || chat.type === "supergroup";
+  const repliedToBot = !!((msg.reply_to_message || {}).from || {}).is_bot
+    && String(((msg.reply_to_message || {}).from || {}).username || "").toLowerCase() === botUsername;
+  let addressed = addressedToBot(msg, text, botUsername);
+
   if (hasMedia) {
+    // В группе скриншоты без обращения — мимо: иначе бот комментирует каждую картинку.
+    if (isGroup && !addressed) return null;
     // Скриншот — самое ценное, что может прислать человек. Пересылаем админам.
     const admins = idList(env, "ADMIN_IDS");
     for (const a of admins) {
@@ -447,21 +456,19 @@ async function handleMessage(env, msg) {
         } catch (e) {}
       }
     }
-    return {
-      text: admins.length
+    const got = isGroup
+      ? (admins.length ? "Передал разработчику ✅" : "Принял. Опиши словами: что делал и что случилось.")
+      : (admins.length
         ? "Скриншот получил, передал разработчику ✅\n\nНапиши в двух словах: что случилось и на какой карте (если в бою) — так найдём быстрее."
-        : "Скриншот вижу, но пересылать пока некому. Опиши проблему словами: что делал и что случилось.",
-      replyTo: msg.message_id,
-    };
+        : "Скриншот вижу, но пересылать пока некому. Опиши проблему словами: что делал и что случилось.");
+    return { text: got, replyTo: msg.message_id };
   }
   if (!text) return null;
 
   const allowed = idList(env, "ALLOWED_CHAT_IDS");
   if (allowed.length && !allowed.includes(chatId)) return { skip: "чужой чат" };
 
-  const botUsername = String(env.BOT_USERNAME || "Helperprivatblitzbot").replace(/^@/, "").toLowerCase();
-  const isGroup = chat.type === "group" || chat.type === "supergroup";
-  let addressed = addressedToBot(msg, text, botUsername);
+  if (!text) return null;
   if (isGroup && addressed) {
     text = text.replace(new RegExp("@" + botUsername, "ig"), "").trim();
   }
@@ -803,7 +810,7 @@ export default {
       if (url.searchParams.get("info") === "1") {
         const rel = await latestRelease(env);
         return new Response(
-          `BlitzBot worker\nbuild: 6.62 (уведомления исчезают после ответа; «В работе»; пауза)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
+          `BlitzBot worker\nbuild: 6.63 (в группе молчит на картинки без обращения)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
           `webhook secret: ${secret ? "set" : "НЕ ЗАДАН"}\n` +
           `chat filter: ${idList(env, "ALLOWED_CHAT_IDS").join(",") || "любой"}\n` +
           `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n` +
