@@ -563,14 +563,18 @@ async function handleMessage(env, msg) {
       if (!clean) return { text: "Пустой ответ — напиши текст, который отправить человеку." };
       try {
         await send(env, target, `Ответ разработчика:\n\n${clean}`);
-        // гасим поле ввода, чтобы не отвечать дважды
+        // Убрать уведомление из чата админа: ответил — значит, разбирать больше нечего.
+        const nn = src.match(/#n=(\d+)/);
+        const notifId = nn ? parseInt(nn[1], 10) : replied.message_id;
         try {
-          await tgCall(env, "editMessageText", {
-            chat_id: chatId, message_id: replied.message_id,
-            text: `✅ Отправлено в чат ${target}:\n\n${clean.slice(0, 300)}`,
-          });
+          await tgCall(env, "deleteMessage", { chat_id: chatId, message_id: notifId });
         } catch (e2) {}
-        return { text: `Отправлено человеку в чат ${target} ✅` };
+        if (notifId !== replied.message_id) {
+          try {
+            await tgCall(env, "deleteMessage", { chat_id: chatId, message_id: replied.message_id });
+          } catch (e2) {}
+        }
+        return { text: `Отправил человеку в чат ${target} ✅ Уведомление убрал.` };
       } catch (e) {
         return { text: `Не смог отправить (${String(e.message || e)}). Возможно, человек заблокировал бота.` };
       }
@@ -620,18 +624,40 @@ async function handleMessage(env, msg) {
   };
 }
 
-const LAST_ESC = new Map();   // чат -> время последней эскалации (живёт в рамках воркера)
+const LAST_ESC = new Map();   // чат -> время последней эскалации (быстро, но живёт только в одном инстансе)
+
+// Пауза между уведомлениями по одному чату. Держим ещё и в кэше Cloudflare:
+// воркеров несколько, память у каждого своя, иначе одна и та же просьба
+// приходит админу дважды (как было с Сазом в 18:30 и 18:31).
+async function escAllowed(chatId, cooldownMs) {
+  const now = Date.now();
+  const key = new Request(`https://esc-cache.internal/${chatId}`);
+  const c = (typeof caches !== "undefined" && caches.default) ? caches.default : null;
+  if (c) {
+    try {
+      if (await c.match(key)) return false;
+    } catch (e) {}
+  }
+  const last = LAST_ESC.get(chatId) || 0;
+  if (now - last < cooldownMs) return false;
+  LAST_ESC.set(chatId, now);
+  if (c && cooldownMs > 0) {
+    try {
+      await c.put(key, new Response("1", {
+        headers: { "cache-control": `max-age=${Math.max(1, Math.ceil(cooldownMs / 1000))}` },
+      }));
+    } catch (e) {}
+  }
+  return true;
+}
 
 async function escalate(env, ev) {
   const admins = idList(env, "ADMIN_IDS");
   if (!admins.length || !ev) return;
   // не чаще раза в 10 минут на чат: иначе одно «не понял» превращается в 6 уведомлений
-  const now = Date.now();
   const rawCd = parseInt(env.ESC_COOLDOWN_SEC, 10);   // 0 — законное значение (без паузы)
   const cooldown = (Number.isFinite(rawCd) ? rawCd : 600) * 1000;
-  const last = LAST_ESC.get(ev.chat.id) || 0;
-  if (now - last < cooldown) return;
-  LAST_ESC.set(ev.chat.id, now);
+  if (!(await escAllowed(ev.chat.id, cooldown))) return;
   const who = ev.user.username ? "@" + ev.user.username
     : ((ev.user.first_name || "") + " " + (ev.user.last_name || "")).trim();
   const where = ev.chat.title || (ev.user.username ? "@" + ev.user.username : (who || "личка"));
@@ -642,6 +668,8 @@ async function escalate(env, ev) {
   const keyboard = [[
     { text: "✍️ Ответить", callback_data: `rp:${ev.chat.id}` },
     { text: "✅ Закрыть", callback_data: `rc:${ev.chat.id}` },
+  ], [
+    { text: "🛠 Оставить — надо чинить", callback_data: `rw:${ev.chat.id}` },
   ]];
   for (const a of admins) {
     try {
@@ -661,7 +689,7 @@ async function startAdminReply(env, chatId, target, messageId) {
   try {
     await tgCall(env, "sendMessage", {
       chat_id: chatId,
-      text: `Напиши ответ — отправлю человеку в чат ${target}.\n\n#r=${target}`,
+      text: `Напиши ответ — отправлю человеку в чат ${target}.\n\n#r=${target} #n=${messageId}`,
       reply_markup: { force_reply: true, selective: true },
     });
   } catch (e) {}
@@ -686,6 +714,23 @@ async function handleCallback(env, cq) {
         await startAdminReply(env, chatId, target, (cq.message || {}).message_id);
       } else {
         await send(env, chatId, "Это только для разработчика.");
+      }
+    } else if (data.startsWith("rw:")) {
+      // «надо чинить»: уведомление не удаляем, помечаем и оставляем под рукой
+      if (await isAdminUser(env, (cq.from || {}).id)) {
+        const msg0 = cq.message || {};
+        const src = String(msg0.text || "");
+        try {
+          await tgCall(env, "editMessageText", {
+            chat_id: chatId, message_id: msg0.message_id,
+            text: "🛠 В работе — оставил, чтобы не забыть.\n\n" + src.replace(/^🛠 В работе[^\n]*\n\n/, ""),
+            disable_web_page_preview: true,
+            reply_markup: { inline_keyboard: [[
+              { text: "✍️ Ответить", callback_data: `rp:${data.slice(3)}` },
+              { text: "✅ Закрыть", callback_data: `rc:${data.slice(3)}` },
+            ]] },
+          });
+        } catch (e) {}
       }
     } else if (data.startsWith("rc:")) {
       if (await isAdminUser(env, (cq.from || {}).id)) {
@@ -739,10 +784,26 @@ export default {
         });
         return new Response(JSON.stringify(r, null, 1), { headers: { "content-type": "application/json" } });
       }
+      if (secret && url.searchParams.get("probe") === secret) {
+        // Диагностика: что бот ответил бы на такое сообщение (ничего не отправляет).
+        const ptext = url.searchParams.get("text") || "";
+        const pchat = parseInt(url.searchParams.get("chat") || "0", 10);
+        const puser = parseInt(url.searchParams.get("user") || "0", 10);
+        const fake = {
+          message_id: 1,
+          from: { id: puser, username: "probe", first_name: "probe" },
+          chat: { id: pchat, type: pchat < 0 ? "supergroup" : "private", title: "probe" },
+          text: ptext,
+        };
+        let out;
+        try { out = await handleMessage(env, fake); }
+        catch (e) { out = { error: String((e && e.message) || e) }; }
+        return new Response(JSON.stringify(out, null, 1), { headers: { "content-type": "application/json" } });
+      }
       if (url.searchParams.get("info") === "1") {
         const rel = await latestRelease(env);
         return new Response(
-          `BlitzBot worker\nbuild: 6.61 (группы: тишина, пауза 10 мин, команды=обращение)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
+          `BlitzBot worker\nbuild: 6.62 (уведомления исчезают после ответа; «В работе»; пауза)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
           `webhook secret: ${secret ? "set" : "НЕ ЗАДАН"}\n` +
           `chat filter: ${idList(env, "ALLOWED_CHAT_IDS").join(",") || "любой"}\n` +
           `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n` +
