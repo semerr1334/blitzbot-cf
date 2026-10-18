@@ -1,0 +1,9 @@
+name = "blitzbot"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# Переменные, которые НЕ секретные. Секреты (TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET,
+# GITHUB_TOKEN) задаются в панели Cloudflare: Settings -> Variables and Secrets.
+[vars]
+GITHUB_REPO = "semerr1334/BlitzServer1120"
+DIGEST_HOUR = "21"
