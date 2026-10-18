@@ -48,6 +48,7 @@ def main() -> int:
             {
                 "id": i.get("id"),
                 "title": i.get("title"),
+                "short": i.get("short") or i.get("title"),
                 "status": i.get("status"),
                 "fixed_in": i.get("fixed_in"),
                 "severe": bool(i.get("severe")),
