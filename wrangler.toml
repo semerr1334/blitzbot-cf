@@ -8,7 +8,15 @@ compatibility_date = "2026-10-01"
 [vars]
 GITHUB_REPO = "semerr1334/BlitzServer1120"
 DIGEST_HOUR = "21"
-# твой id и Акима — /logs, /digest и уведомления о вопросах без ответа
+# твой id и Акима — /logs, /digest, уведомления и проход без подписки
 ADMIN_IDS = "6457932252,7167338117"
 # пусто = бот отвечает в любом чате; впиши id группы, чтобы закрыть на свои
 ALLOWED_CHAT_IDS = ""
+
+# --- выдача АПК только подписчикам канала ---
+# Канал: https://t.me/privatbliz (Wot blitz private, id -1003900573668)
+# ВАЖНО: бот должен быть АДМИНИСТРАТОРОМ канала, иначе Telegram не даёт
+# проверить подписку. Проверка тогда не блокирует никого (так задумано).
+CHANNEL = "@privatbliz"
+CHANNEL_LINK = "https://t.me/privatbliz"
+REQUIRE_SUB = "1"
