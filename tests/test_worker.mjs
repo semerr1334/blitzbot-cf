@@ -26,6 +26,7 @@ const ENV = {
 let sent = [];
 let lastDownloadLink = "";
 globalThis.__deletedMsgs = [];
+globalThis.__forwarded = [];
 
 // --- фейковая сеть ---------------------------------------------------------
 globalThis.caches = {
@@ -44,6 +45,10 @@ globalThis.fetch = async (url, init = {}) => {
     }
     if (u.endsWith("/sendMessage")) {
       sent.push(body);
+      return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }
+    if (u.endsWith("/forwardMessage")) {
+      globalThis.__forwarded.push(body);
       return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
     }
     if (u.endsWith("/deleteMessage")) {
@@ -443,6 +448,7 @@ check("старое уведомление: человеку ничего не �
 // --- упрощённый ответ: кнопка «Ответить» ---
 globalThis.__forceReply = null;
 globalThis.__deletedMsgs = [];
+globalThis.__forwarded = [];
 globalThis.fetch = ((orig) => async (url, init) => {
   const body = init && init.body ? JSON.parse(init.body) : {};
   if (String(url).endsWith("/sendMessage") && body.reply_markup && body.reply_markup.force_reply) {
@@ -489,6 +495,7 @@ globalThis.fetch = ((orig) => async (url, init) => {
   return orig(url, init);
 })(globalThis.fetch);
 globalThis.__deletedMsgs = [];
+globalThis.__forwarded = [];
 await post(callback("rw:777", { userId: 42, chatId: 42, messageId: 140 }));
 check("кнопка «В работе»: уведомление не удаляют", globalThis.__deletedMsgs.length === 0, JSON.stringify(globalThis.__deletedMsgs));
 check("кнопка «В работе»: помечено и остались кнопки ответа",
@@ -565,6 +572,36 @@ await post(groupMsg("вылетает в ангаре постоянно", { mid
 await post(groupMsg("нет знака классности ни разу", { mid: 42 }), "s3cret", envSlow);
 const escCount = sent.filter((x) => x.chat_id === 42 && /спрашивает/.test(x.text || "")).length;
 check("группа: эскалации не чаще раза в 10 минут на чат", escCount <= 1, String(escCount));
+
+// --- ГРУППА: картинки без обращения не трогаем ---
+function mediaMsg({ caption, chatId = GROUP, userId = 5, username = "player", mid = 60 } = {}) {
+  const m = {
+    message_id: mid,
+    from: { id: userId, username, first_name: "Test" },
+    chat: { id: chatId, type: chatId < 0 ? "supergroup" : "private", title: "Поболтушки" },
+    photo: [{ file_id: "ph1" }],
+  };
+  if (caption) m.caption = caption;
+  return { update_id: 30, message: m };
+}
+
+sent = []; globalThis.__forwarded = [];
+await post(mediaMsg({ mid: 60 }));
+check("группа: фото без подписи — молчит", sent.filter((x) => x.chat_id === GROUP).length === 0,
+  JSON.stringify(sent.map((x) => x.chat_id)));
+check("группа: фото без подписи — админу не пересылается", globalThis.__forwarded.length === 0);
+
+sent = []; globalThis.__forwarded = [];
+await post(mediaMsg({ mid: 61, caption: "@Helperprivatblitzbot вот скрин ошибки" }));
+check("группа: фото с @ — пересылает админу", globalThis.__forwarded.some((f) => f.chat_id === 42),
+  JSON.stringify(globalThis.__forwarded));
+const mediaReply = (sent.filter((x) => x.chat_id === GROUP).map((x) => x.text || "").slice(-1)[0] || "");
+check("группа: фото с @ — короткий ответ", /Передал разработчику/.test(mediaReply) && mediaReply.length < 60, mediaReply);
+
+sent = [];
+await post(mediaMsg({ mid: 62, chatId: 777 }));
+check("личка: фото — длинный ответ с просьбой уточнить",
+  /Скриншот получил/.test((sent.filter((x) => x.chat_id === 777).map((x) => x.text || "").slice(-1)[0] || "")));
 
 fs.unlinkSync(new URL("../tests/_worker.mjs", import.meta.url));
 
