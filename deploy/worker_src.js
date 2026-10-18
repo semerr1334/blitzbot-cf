@@ -127,6 +127,42 @@ async function send(env, chatId, text, replyTo, keyboard) {
   }
 }
 
+// ------------------------------------------------------------- подписка ---
+
+// Проверяем, подписан ли человек на канал. Работает только если бот — админ
+// канала. Если проверка невозможна (бота не добавили, канал закрыт), НЕ
+// блокируем: иначе из-за настройки весь чат останется без ссылок.
+async function isSubscribed(env, userId) {
+  const ch = env.CHANNEL;
+  if (!ch) return true;
+  try {
+    const r = await tgCall(env, "getChatMember", { chat_id: ch, user_id: userId });
+    if (!r || !r.ok) return true;
+    const st = (r.result || {}).status;
+    return st === "creator" || st === "administrator" || st === "member"
+      || (st === "restricted" && !!r.result.is_member);
+  } catch (e) {
+    return true;
+  }
+}
+
+function gateKeyboard(env) {
+  const link = env.CHANNEL_LINK || (env.CHANNEL && String(env.CHANNEL).startsWith("@")
+    ? "https://t.me/" + String(env.CHANNEL).replace(/^@/, "")
+    : "");
+  const rows = [];
+  if (link) rows.push([{ text: "📢 Подписаться на канал", url: link }]);
+  rows.push([{ text: "✅ Я подписался", callback_data: "sub:check" }]);
+  return rows;
+}
+
+function gateText(env) {
+  return "Ссылка на АПК — для подписчиков канала.\n\n"
+    + "1) Нажми «Подписаться» и подпишись.\n"
+    + "2) Вернись и нажми «Я подписался» — сразу пришлю ссылку.\n\n"
+    + "Подписка бесплатная, отписаться можно когда угодно.";
+}
+
 // ---------------------------------------------------------------- релиз ---
 
 async function latestRelease(env) {
@@ -380,6 +416,9 @@ async function handleMessage(env, msg) {
     if (["version", "ver", "update", "apk"].includes(cmd)) {
       const rel = await latestRelease(env);
       if (!rel.tag) return { text: "Не смог узнать версию — GitHub не ответил. Попробуй через минуту." };
+      if (env.REQUIRE_SUB && env.CHANNEL && !(await isSubscribed(env, userId))) {
+        return { text: gateText(env), replyTo: msg.message_id, keyboard: gateKeyboard(env) };
+      }
       return {
         replyTo: msg.message_id,
         text: `Последняя версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`,
@@ -427,7 +466,15 @@ async function handleMessage(env, msg) {
   }
 
   const rel = await latestRelease(env);
-  const answer = render(issue, text, rel);
+  let answer = render(issue, text, rel);
+
+  // Если в ответе есть ссылка на АПК и включён режим подписки — проверяем.
+  if (env.REQUIRE_SUB && env.CHANNEL && answer.includes(rel.apk || "\u0000")) {
+    const sub = await isSubscribed(env, userId);
+    if (!sub) {
+      return { text: gateText(env), replyTo: msg.message_id, keyboard: gateKeyboard(env) };
+    }
+  }
   const version = parseVersion(text);
   const fixed = parseVersion(issue.fixed_in || "");
   const regression = !!(fixed && version && (version[0] > fixed[0] || (version[0] === fixed[0] && version[1] >= fixed[1])));
@@ -465,6 +512,15 @@ async function handleCallback(env, cq) {
       const issue = KB.issues.find((i) => i.id === id);
       if (issue) await send(env, chatId, render(issue, "", await latestRelease(env)));
       else await send(env, chatId, "Такой темы нет. Напиши, что случилось, обычными словами.");
+    } else if (data === "sub:check") {
+      const userId = ((cq.from || {}).id) || 0;
+      if (await isSubscribed(env, userId)) {
+        const rel = await latestRelease(env);
+        await send(env, chatId, `Готово ✅\n\nПоследняя версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`);
+      } else {
+        await send(env, chatId, "Пока не вижу подписки.\n\nПодпишись на канал и нажми «Я подписался» ещё раз.",
+          null, gateKeyboard(env));
+      }
     } else if (data === "b:new") {
       await send(env, chatId, whatsNewText(await latestRelease(env)));
     } else if (data === "b:all") {
@@ -499,7 +555,9 @@ export default {
           `BlitzBot worker\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
           `webhook secret: ${secret ? "set" : "НЕ ЗАДАН"}\n` +
           `chat filter: ${idList(env, "ALLOWED_CHAT_IDS").join(",") || "любой"}\n` +
-          `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n`,
+          `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n` +
+          `channel: ${env.CHANNEL || "не задан"}\n` +
+          `require sub: ${env.REQUIRE_SUB ? "да" : "нет"}\n`,
           { headers: { "content-type": "text/plain; charset=utf-8" } },
         );
       }
