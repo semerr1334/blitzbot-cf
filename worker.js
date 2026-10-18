@@ -16,7 +16,7 @@ const KB = {"issues":[{"id":"where-download","title":"Где скачать мо
 
 // Запасной вариант, если GitHub API недоступен или упёрлись в лимит:
 // сборка кладёт сюда ссылки последнего релиза на момент сборки.
-const FALLBACK_RELEASE = {"tag": "v6.59", "apk": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.59/WoT_Blitz_11.20.0_Server_v659.apk", "hotfix": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.59/blitz_hotfix_659.zip"};
+const FALLBACK_RELEASE = {"tag": "v6.60", "apk": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.60/WoT_Blitz_11.20.0_Server_v660.apk", "hotfix": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.60/blitz_hotfix_660.zip"};
 
 const TG = (token, method) => `https://api.telegram.org/bot${token}/${method}`;
 const MSK_OFFSET = 3 * 3600 * 1000;
@@ -24,6 +24,28 @@ const MSK_OFFSET = 3 * 3600 * 1000;
 function envInt(env, name, def) {
   const v = parseInt(env[name] || "", 10);
   return Number.isFinite(v) ? v : def;
+}
+
+// Одно вложение — одно сообщение админу (раньше приходило два: пересылка + подпись).
+async function copyMedia(env, msg, chat, user, note, admins) {
+  const who = user.username ? "@" + user.username : (user.first_name || "кто-то");
+  const cap = (`📎 ${who} · чат ${chat.id}` + (note ? "\n" + note : "")).slice(0, 1000);
+  for (const a of admins) {
+    try {
+      if (msg.photo) {
+        const sizes = msg.photo;
+        await tgCall(env, "sendPhoto", { chat_id: a, photo: sizes[sizes.length - 1].file_id, caption: cap });
+      } else if (msg.video) {
+        await tgCall(env, "sendVideo", { chat_id: a, video: msg.video.file_id, caption: cap, supports_streaming: true });
+      } else if (msg.document) {
+        await tgCall(env, "sendDocument", { chat_id: a, document: msg.document.file_id, caption: cap });
+      } else {
+        await send(env, a, cap);
+      }
+    } catch (e) {
+      try { await send(env, a, cap); } catch (e2) {}
+    }
+  }
 }
 
 function idList(env, name) {
@@ -45,7 +67,7 @@ function parseVersion(text) {
   return last ? [6, parseInt(last[1], 10)] : null;
 }
 
-function classify(text) {
+function classifyTop(text) {
   const t = norm(text);
   let best = null, bestScore = 0;
   for (const issue of KB.issues) {
@@ -54,7 +76,12 @@ function classify(text) {
     for (const k of issue.keywords || []) if (k && t.includes(k)) score += 1;
     if (score > bestScore) { best = issue; bestScore = score; }
   }
-  return { issue: bestScore >= 2 ? best : null, score: bestScore };
+  return { issue: best, score: bestScore };
+}
+
+function classify(text) {
+  const r = classifyTop(text);
+  return { issue: r.score >= 2 ? r.issue : null, score: r.score };
 }
 
 // «Ок», «Эмм», «Походу», «Спасибо» — это не вопросы. В группе на такое молчим.
@@ -439,26 +466,26 @@ async function handleMessage(env, msg) {
   let addressed = addressedToBot(msg, text, botUsername);
 
   if (hasMedia) {
-    // В группе картинки без обращения не комментируем: иначе бот отвечает на каждый мем.
-    // Но если человек подписал («что делать при этой ошибке») — молча передаём админу.
-    const silent = isGroup && !addressed;
-    if (silent && (!text || isNoise(text))) return null;
-    // Скриншот — самое ценное, что может прислать человек. Пересылаем админам.
     const admins = idList(env, "ADMIN_IDS");
-    for (const a of admins) {
-      try {
-        await tgCall(env, "forwardMessage", { chat_id: a, from_chat_id: chatId, message_id: msg.message_id });
-      } catch (e) {}
+    // Подпись под картинкой — тоже вопрос. Если ответ в базе есть, отвечаем сразу,
+    // не гоняя человека и админа. Иначе в группе молчим и тихо передаём админу.
+    const c = text ? classifyTop(text) : { issue: null, score: 0 };
+    // Подпись-вопрос («а что делать при этой ошибке») — уже повод ответить, даже если
+    // совпало одно слово: человек спрашивает по делу, а не шлёт мем.
+    const asks = /\?/.test(text)
+      || /(что|ч[её])\s+(делать|это|такое|значит)/iu.test(text)
+      || /^(как|почему|зачем|где|можно|куда)\b/iu.test(text);
+    const enough = c.score >= (isGroup ? 6 : 4) || (isGroup && asks && c.score >= 1);
+    const answer = (c.issue && enough) ? render(c.issue, text, await latestRelease(env)) : null;
+
+    if (isGroup && !addressed && !answer) {
+      if (!text || isNoise(text)) return null;       // стикеры/мемы без подписи — молчим
+      await copyMedia(env, msg, chat, user, text, admins);
+      return null;
     }
-    if (admins.length) {
-      const who = user.username ? "@" + user.username : (user.first_name || "кто-то");
-      for (const a of admins) {
-        try {
-          await send(env, a, `📎 Вложение от ${who} (чат ${chatId})` + (text ? `\nПодпись: ${text}` : ""));
-        } catch (e) {}
-      }
-    }
-    if (silent) return null;                 // в группе — ни слова, только пересылка
+    await copyMedia(env, msg, chat, user, text, admins);
+    if (answer) return { text: answer, replyTo: msg.message_id };
+
     const got = isGroup
       ? (admins.length ? "Передал разработчику ✅" : "Принял. Опиши словами: что делал и что случилось.")
       : (admins.length
@@ -813,7 +840,7 @@ export default {
       if (url.searchParams.get("info") === "1") {
         const rel = await latestRelease(env);
         return new Response(
-          `BlitzBot worker\nbuild: 6.66 (CoreCLR: шаги для телефона)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
+          `BlitzBot worker\nbuild: 6.67 (скриншоты: один файл — одно сообщение; ответ на подпись-вопрос)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
           `webhook secret: ${secret ? "set" : "НЕ ЗАДАН"}\n` +
           `chat filter: ${idList(env, "ALLOWED_CHAT_IDS").join(",") || "любой"}\n` +
           `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n` +
