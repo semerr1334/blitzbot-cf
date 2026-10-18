@@ -703,6 +703,8 @@ class Bot:
             text = re.sub("@" + re.escape(bot_user), "", text, flags=re.I).strip()
         has_media = any(k in msg for k in ("photo", "document", "video"))
         if has_media:
+            if is_group and not addressed:
+                return                    # в группе картинки без обращения не комментируем
             if not self.allow_reply(chat_id, user_id):
                 return
             self.on_media(chat_id, user, msg, text)
