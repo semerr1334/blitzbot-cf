@@ -54,7 +54,36 @@ function classify(text) {
     for (const k of issue.keywords || []) if (k && t.includes(k)) score += 1;
     if (score > bestScore) { best = issue; bestScore = score; }
   }
-  return bestScore >= 2 ? best : null;
+  return { issue: bestScore >= 2 ? best : null, score: bestScore };
+}
+
+// «Ок», «Эмм», «Походу», «Спасибо» — это не вопросы. В группе на такое молчим.
+const NOISE = new Set(["ок", "окей", "ok", "да", "нет", "ага", "угу", "спс", "спасибо",
+  "привет", "здарова", "ааа", "эмм", "эм", "хм", "ясно", "понял", "походу", "лол", "ну",
+  "плюс", "тест", "ы", "ура", "лол)", "ахах", "хах"]);
+
+function isNoise(text) {
+  const t = norm(text).replace(/[^\p{L}\p{N}+]/gu, "");
+  if (!t) return true;
+  if (t.length <= 2) return true;
+  if (NOISE.has(t)) return true;
+  if (/^(.)\1+$/u.test(t)) return true;   // «ааааа», «))))»
+  return false;
+}
+
+// Обращаются ли к боту: команда, @упоминание, реплай на его сообщение.
+function addressedToBot(msg, text, botUsername) {
+  const r = msg.reply_to_message;
+  if (r && (r.from || {}).username
+      && String(r.from.username).toLowerCase() === botUsername) return true;
+  const ents = msg.entities || msg.caption_entities || [];
+  for (const e of ents) {
+    if (e.type === "mention") {
+      const m = text.slice(e.offset, e.offset + e.length);
+      if (m.toLowerCase() === "@" + botUsername) return true;
+    }
+  }
+  return text.toLowerCase().includes("@" + botUsername);
 }
 
 function chunk(text, n = 3800) {
@@ -430,11 +459,18 @@ async function handleMessage(env, msg) {
   const allowed = idList(env, "ALLOWED_CHAT_IDS");
   if (allowed.length && !allowed.includes(chatId)) return { skip: "чужой чат" };
 
+  const botUsername = String(env.BOT_USERNAME || "Helperprivatblitzbot").replace(/^@/, "").toLowerCase();
+  const isGroup = chat.type === "group" || chat.type === "supergroup";
+  const addressed = addressedToBot(msg, text, botUsername);
+  if (isGroup && addressed) {
+    text = text.replace(new RegExp("@" + botUsername, "ig"), "").trim();
+  }
+
   const admins = idList(env, "ADMIN_IDS");
   const isAdmin = admins.length === 0 || admins.includes(userId);
 
   // «Что нового» текстом — люди так пишут чаще, чем командой
-  if (/^(что|чо|чё|че)\s*нов(ого|ое|енького)?(?:$|[\s?!.,])/iu.test(norm(text))) {
+  if ((!isGroup || addressed) && /^(что|чо|чё|че)\s*нов(ого|ое|енького)?(?:$|[\s?!.,])/iu.test(norm(text))) {
     return { text: whatsNewText(await latestRelease(env)), replyTo: msg.message_id };
   }
 
@@ -540,12 +576,21 @@ async function handleMessage(env, msg) {
     }
   }
 
-  const issue = classify(text);
+  const { issue, score } = classify(text);
+
+  // В ГРУППЕ МОЛЧИМ, если это не команда, не @обращение и не явный вопрос по теме.
+  // Иначе бот превращается в спам: отвечает на «Ок», «Эмм», «Походу».
+  if (isGroup && !addressed) {
+    if (isNoise(text)) return null;
+    if (!issue || score < 5) return null;
+  }
+
   if (!issue) {
+    if (isGroup && !addressed) return null;
     return {
       text: "Пока не понял, что не работает.\n\nНапиши по-простому:\n1) что делал;\n2) что случилось;\n3) карта или танк (если в бою).\n\nИли посмотри /issues — там список известного.",
       replyTo: msg.message_id,
-      escalate: { text, ask: "уточнить детали: что делал и что случилось", chat, user },
+      escalate: { text, ask: "что делал и что случилось", chat, user },
     };
   }
 
@@ -563,7 +608,7 @@ async function handleMessage(env, msg) {
   const version = parseVersion(text);
   const fixed = parseVersion(issue.fixed_in || "");
   const regression = !!(fixed && version && (version[0] > fixed[0] || (version[0] === fixed[0] && version[1] >= fixed[1])));
-  const esc = regression || issue.status === "open" || !!issue.severe
+  const esc = (regression || issue.status === "open" || !!issue.severe) && score >= 4
     ? { text, ask: issue.ask || "", chat, user }
     : null;
   return {
@@ -574,16 +619,25 @@ async function handleMessage(env, msg) {
   };
 }
 
+const LAST_ESC = new Map();   // чат -> время последней эскалации (живёт в рамках воркера)
+
 async function escalate(env, ev) {
   const admins = idList(env, "ADMIN_IDS");
   if (!admins.length || !ev) return;
+  // не чаще раза в 10 минут на чат: иначе одно «не понял» превращается в 6 уведомлений
+  const now = Date.now();
+  const rawCd = parseInt(env.ESC_COOLDOWN_SEC, 10);   // 0 — законное значение (без паузы)
+  const cooldown = (Number.isFinite(rawCd) ? rawCd : 600) * 1000;
+  const last = LAST_ESC.get(ev.chat.id) || 0;
+  if (now - last < cooldown) return;
+  LAST_ESC.set(ev.chat.id, now);
   const who = ev.user.username ? "@" + ev.user.username
     : ((ev.user.first_name || "") + " " + (ev.user.last_name || "")).trim();
   const where = ev.chat.title || (ev.user.username ? "@" + ev.user.username : (who || "личка"));
   const body = `❗ ${who || "Кто-то"} спрашивает\n\n`
     + `«${(ev.text || "").slice(0, 400)}»\n\n`
     + `Откуда: ${where}`
-    + (ev.ask ? `\nЧто уточнить: ${ev.ask}` : "");
+    + (ev.ask ? `\nЧто уточнить: ${String(ev.ask).replace(/^уточнить детали:\s*/i, "")}` : "");
   const keyboard = [[
     { text: "✍️ Ответить", callback_data: `rp:${ev.chat.id}` },
     { text: "✅ Закрыть", callback_data: `rc:${ev.chat.id}` },
