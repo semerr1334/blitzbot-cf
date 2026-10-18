@@ -155,13 +155,24 @@ function render(issue, text, rel) {
 }
 
 function knownList() {
-  const st = { fixed: "починено", open: "в работе", deferred: "отложено", info: "это норма" };
-  const lines = ["Что я знаю:"];
-  for (const i of KB.issues) {
-    const tail = i.fixed_in ? ` — v${i.fixed_in}` : "";
-    lines.push(`• ${i.title} — ${st[i.status] || "это норма"}${tail}`);
+  // Группируем: так список читается, а не «простыня из 23 строк».
+  const groups = [
+    { st: "fixed", head: "✅ Исправлено" },
+    { st: "open", head: "🔧 В работе" },
+    { st: "deferred", head: "⏸ Отложено" },
+    { st: "info", head: "ℹ️ Справка" },
+  ];
+  const lines = [];
+  for (const g of groups) {
+    const items = KB.issues.filter((i) => (i.status || "info") === g.st);
+    if (!items.length) continue;
+    lines.push(g.head + ":");
+    for (const i of items) {
+      const name = i.short || i.title;
+      lines.push(g.st === "fixed" && i.fixed_in ? `• ${name} — с v${i.fixed_in}` : `• ${name}`);
+    }
+    lines.push("");
   }
-  lines.push("");
   lines.push("Напиши, что не работает, обычными словами — подскажу, что делать.");
   return lines.join("\n");
 }
@@ -318,11 +329,27 @@ async function handleMessage(env, msg) {
     }
     if (cmd === "logs") {
       if (!isAdmin) return { text: "Это команда для разработчика." };
-      return { text: await cmdLogs(env, arg) };
+      if (!env.GITHUB_TOKEN) {
+        return { text: "Логи не подключены: в настройках Worker нет GITHUB_TOKEN.\n\n"
+          + "Репозиторий с логами приватный, без токена бот их не видит.\n"
+          + "GitHub → Settings → Developer settings → Fine-grained tokens → "
+          + "права Contents: Read-only на репозиторий с логами → добавить сюда как Secret GITHUB_TOKEN." };
+      }
+      try {
+        return { text: await cmdLogs(env, arg) };
+      } catch (e) {
+        return { text: "Не смог прочитать логи (" + String(e.message || e) + ").\n"
+          + "Проверь, что GITHUB_TOKEN не истёк и у него есть право Contents: Read." };
+      }
     }
     if (cmd === "digest") {
       if (!isAdmin) return { text: "Это команда для разработчика." };
-      return { text: await cmdDigest(env) };
+      if (!env.GITHUB_TOKEN) return { text: "Логи не подключены: нужен GITHUB_TOKEN в настройках Worker." };
+      try {
+        return { text: await cmdDigest(env) };
+      } catch (e) {
+        return { text: "Не смог прочитать логи (" + String(e.message || e) + ")." };
+      }
     }
     if (cmd === "check") text = arg || text;
     else return { text: "Не знаю такую команду. /help — что умею." };
@@ -412,6 +439,12 @@ export default {
     try {
       result = await handleMessage(env, msg);
     } catch (e) {
+      // Молчать нельзя: человек решит, что бот сломан. Говорим честно и внятно.
+      try {
+        await send(env, msg.chat.id, "У меня что-то сломалось на этом сообщении. "
+          + "Попробуй ещё раз или напиши /version — там ссылки на актуальную версию.\n\n"
+          + "Ошибка: " + String(e.message || e).slice(0, 200));
+      } catch (e2) {}
       return new Response("ok");
     }
     if (result && result.text) {
