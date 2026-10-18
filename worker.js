@@ -414,6 +414,11 @@ async function handleMessage(env, msg) {
   const admins = idList(env, "ADMIN_IDS");
   const isAdmin = admins.length === 0 || admins.includes(userId);
 
+  // «Что нового» текстом — люди так пишут чаще, чем командой
+  if (/^(что|чо|чё|че)\s*нов(ого|ое|енького)?(?:$|[\s?!.,])/iu.test(norm(text))) {
+    return { text: whatsNewText(await latestRelease(env)), replyTo: msg.message_id };
+  }
+
   const m = text.match(/^\/([A-Za-z_]+)(?:@\w+)?\s*([\s\S]*)$/);
   if (m) {
     const cmd = m[1].toLowerCase();
@@ -438,6 +443,18 @@ async function handleMessage(env, msg) {
     if (["issues", "problems", "known"].includes(cmd)) return { text: knownList(), replyTo: msg.message_id };
     if (cmd === "id") {
       return { text: `chat_id: ${chatId}\nтвой user_id: ${userId}`, replyTo: msg.message_id };
+    }
+    if (cmd === "reply") {
+      if (!isAdmin) return { text: "Это команда для разработчика." };
+      const mm = arg.match(/^(-?\d+)\s+([\s\S]+)$/);
+      if (!mm) return { text: "Как ответить: /reply <chat_id> <текст>\nchat_id видно в уведомлении.\n"
+        + "Или просто ответь (реплаем) на сообщение бота с вопросом." };
+      try {
+        await send(env, parseInt(mm[1], 10), `Ответ разработчика:\n\n${mm[2].trim()}`);
+        return { text: `Отправлено в чат ${mm[1]} ✅` };
+      } catch (e) {
+        return { text: `Не смог отправить (${String(e.message || e)}).` };
+      }
     }
     if (cmd === "logs") {
       if (!isAdmin) return { text: "Это команда для разработчика." };
@@ -465,6 +482,24 @@ async function handleMessage(env, msg) {
     }
     if (cmd === "check") text = arg || text;
     else return { text: "Не знаю такую команду. /help — что умею." };
+  }
+
+  // --- админ отвечает человеку, нажав «ответить» на уведомление ---
+  const replied = msg.reply_to_message;
+  if (isAdmin && replied && (replied.from || {}).is_bot) {
+    const src = String(replied.text || replied.caption || "");
+    const mm = src.match(/#r=(-?\d+)/);
+    if (mm) {
+      const target = parseInt(mm[1], 10);
+      const clean = text.replace(/^\/reply\s+/, "").trim();
+      if (!clean) return { text: "Пустой ответ — напиши текст, который отправить человеку." };
+      try {
+        await send(env, target, `Ответ разработчика:\n\n${clean}`);
+        return { text: `Отправлено человеку в чат ${target} ✅` };
+      } catch (e) {
+        return { text: `Не смог отправить (${String(e.message || e)}). Возможно, человек заблокировал бота.` };
+      }
+    }
   }
 
   const issue = classify(text);
@@ -500,13 +535,21 @@ async function escalate(env, ev) {
   if (!admins.length || !ev) return;
   const who = ev.user.username ? "@" + ev.user.username
     : ((ev.user.first_name || "") + " " + (ev.user.last_name || "")).trim();
+  const where = ev.chat.title || (ev.user.username ? "@" + ev.user.username : (who || "личка"));
   const body = `❗ Вопрос без готового ответа\n\n`
-    + `Чат: ${ev.chat.title || "?"} (${ev.chat.id})\n`
+    + `Чат: ${where} (${ev.chat.id})\n`
     + `Кто: ${who || "?"} (id ${ev.user.id})\n`
     + `Текст: ${(ev.text || "").slice(0, 500)}\n\n`
-    + `Что просить: ${ev.ask || "уточнить детали: что делал и что случилось"}`;
+    + `Что просить: ${ev.ask || "уточнить детали: что делал и что случилось"}\n\n`
+    + `↩️ Ответь на это сообщение — твой текст уйдёт человеку.\n`
+    + `Или: /reply ${ev.chat.id} текст`;
   for (const a of admins) {
-    await send(env, a, body);
+    // маркер нужен, чтобы понять, кому отвечает админ
+    try {
+      await tgCall(env, "sendMessage", {
+        chat_id: a, text: body + `\n#r=${ev.chat.id}`, disable_web_page_preview: true,
+      });
+    } catch (e) {}
   }
 }
 
