@@ -439,8 +439,10 @@ async function handleMessage(env, msg) {
   let addressed = addressedToBot(msg, text, botUsername);
 
   if (hasMedia) {
-    // В группе скриншоты без обращения — мимо: иначе бот комментирует каждую картинку.
-    if (isGroup && !addressed) return null;
+    // В группе картинки без обращения не комментируем: иначе бот отвечает на каждый мем.
+    // Но если человек подписал («что делать при этой ошибке») — молча передаём админу.
+    const silent = isGroup && !addressed;
+    if (silent && (!text || isNoise(text))) return null;
     // Скриншот — самое ценное, что может прислать человек. Пересылаем админам.
     const admins = idList(env, "ADMIN_IDS");
     for (const a of admins) {
@@ -456,6 +458,7 @@ async function handleMessage(env, msg) {
         } catch (e) {}
       }
     }
+    if (silent) return null;                 // в группе — ни слова, только пересылка
     const got = isGroup
       ? (admins.length ? "Передал разработчику ✅" : "Принял. Опиши словами: что делал и что случилось.")
       : (admins.length
@@ -810,7 +813,7 @@ export default {
       if (url.searchParams.get("info") === "1") {
         const rel = await latestRelease(env);
         return new Response(
-          `BlitzBot worker\nbuild: 6.63 (в группе молчит на картинки без обращения)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
+          `BlitzBot worker\nbuild: 6.64 (скрин с подписью — тихо админу; новая тема CoreCLR)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
           `webhook secret: ${secret ? "set" : "НЕ ЗАДАН"}\n` +
           `chat filter: ${idList(env, "ALLOWED_CHAT_IDS").join(",") || "любой"}\n` +
           `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n` +
