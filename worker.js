@@ -135,6 +135,8 @@ async function send(env, chatId, text, replyTo, keyboard) {
 async function isSubscribed(env, userId) {
   const ch = env.CHANNEL;
   if (!ch) return true;
+  // Свои (админы) проходят всегда — иначе владелец канала блокирует сам себя.
+  if (idList(env, "ADMIN_IDS").includes(userId)) return true;
   try {
     const r = await tgCall(env, "getChatMember", { chat_id: ch, user_id: userId });
     if (!r || !r.ok) return true;
