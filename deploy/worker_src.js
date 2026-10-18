@@ -80,6 +80,11 @@ async function tgCall(env, method, params) {
   return r.json();
 }
 
+function isAdminUser(env, userId) {
+  const admins = idList(env, "ADMIN_IDS");
+  return !admins.length || admins.includes(userId);
+}
+
 function menuKeyboard() {
   return [
     [{ text: "🗺 Карта и коллизии", callback_data: "i:map-collisions" },
@@ -506,6 +511,13 @@ async function handleMessage(env, msg) {
       if (!clean) return { text: "Пустой ответ — напиши текст, который отправить человеку." };
       try {
         await send(env, target, `Ответ разработчика:\n\n${clean}`);
+        // гасим поле ввода, чтобы не отвечать дважды
+        try {
+          await tgCall(env, "editMessageText", {
+            chat_id: chatId, message_id: replied.message_id,
+            text: `✅ Отправлено в чат ${target}:\n\n${clean.slice(0, 300)}`,
+          });
+        } catch (e2) {}
         return { text: `Отправлено человеку в чат ${target} ✅` };
       } catch (e) {
         return { text: `Не смог отправить (${String(e.message || e)}). Возможно, человек заблокировал бота.` };
@@ -547,21 +559,36 @@ async function escalate(env, ev) {
   const who = ev.user.username ? "@" + ev.user.username
     : ((ev.user.first_name || "") + " " + (ev.user.last_name || "")).trim();
   const where = ev.chat.title || (ev.user.username ? "@" + ev.user.username : (who || "личка"));
-  const body = `❗ Вопрос без готового ответа\n\n`
-    + `Чат: ${where} (${ev.chat.id})\n`
-    + `Кто: ${who || "?"} (id ${ev.user.id})\n`
-    + `Текст: ${(ev.text || "").slice(0, 500)}\n\n`
-    + `Что просить: ${ev.ask || "уточнить детали: что делал и что случилось"}\n\n`
-    + `↩️ Ответь на это сообщение — твой текст уйдёт человеку.\n`
-    + `Или: /reply ${ev.chat.id} текст`;
+  const body = `❗ ${who || "Кто-то"} спрашивает\n\n`
+    + `«${(ev.text || "").slice(0, 400)}»\n\n`
+    + `Откуда: ${where}`
+    + (ev.ask ? `\nЧто уточнить: ${ev.ask}` : "");
+  const keyboard = [[
+    { text: "✍️ Ответить", callback_data: `rp:${ev.chat.id}` },
+    { text: "✅ Закрыть", callback_data: `rc:${ev.chat.id}` },
+  ]];
   for (const a of admins) {
-    // маркер нужен, чтобы понять, кому отвечает админ
     try {
       await tgCall(env, "sendMessage", {
-        chat_id: a, text: body + `\n#r=${ev.chat.id}`, disable_web_page_preview: true,
+        chat_id: a,
+        text: body + `\n\n#r=${ev.chat.id}`,
+        disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: keyboard },
       });
     } catch (e) {}
   }
+}
+
+// Админ нажал «Ответить»: показываем поле ввода, привязанное к этому сообщению.
+// Дальше он просто печатает текст — и всё.
+async function startAdminReply(env, chatId, target, messageId) {
+  try {
+    await tgCall(env, "sendMessage", {
+      chat_id: chatId,
+      text: `Напиши ответ — отправлю человеку в чат ${target}.\n\n#r=${target}`,
+      reply_markup: { force_reply: true, selective: true },
+    });
+  } catch (e) {}
 }
 
 async function handleCallback(env, cq) {
@@ -577,6 +604,25 @@ async function handleCallback(env, cq) {
       const issue = KB.issues.find((i) => i.id === id);
       if (issue) await send(env, chatId, render(issue, "", await latestRelease(env)));
       else await send(env, chatId, "Такой темы нет. Напиши, что случилось, обычными словами.");
+    } else if (data.startsWith("rp:")) {
+      const target = parseInt(data.slice(3), 10);
+      if (await isAdminUser(env, (cq.from || {}).id)) {
+        await startAdminReply(env, chatId, target, (cq.message || {}).message_id);
+      } else {
+        await send(env, chatId, "Это только для разработчика.");
+      }
+    } else if (data.startsWith("rc:")) {
+      if (await isAdminUser(env, (cq.from || {}).id)) {
+        try {
+          await tgCall(env, "editMessageReplyMarkup", {
+            chat_id: chatId, message_id: (cq.message || {}).message_id,
+            reply_markup: { inline_keyboard: [] },
+          });
+          await tgCall(env, "deleteMessage", {
+            chat_id: chatId, message_id: (cq.message || {}).message_id,
+          });
+        } catch (e) {}
+      }
     } else if (data === "sub:check") {
       const userId = ((cq.from || {}).id) || 0;
       if (await isSubscribed(env, userId)) {
