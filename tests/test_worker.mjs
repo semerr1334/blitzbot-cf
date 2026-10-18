@@ -592,6 +592,13 @@ check("группа: фото без подписи — молчит", sent.filt
 check("группа: фото без подписи — админу не пересылается", globalThis.__forwarded.length === 0);
 
 sent = []; globalThis.__forwarded = [];
+await post(mediaMsg({ mid: 63, caption: "а чё делать при этой ошибке" }));
+check("группа: фото с подписью без @ — админу уходит", globalThis.__forwarded.some((f) => f.chat_id === 42),
+  JSON.stringify(globalThis.__forwarded));
+check("группа: фото с подписью без @ — в чате тихо", sent.filter((x) => x.chat_id === GROUP).length === 0,
+  JSON.stringify(sent.map((x) => x.chat_id)));
+
+sent = []; globalThis.__forwarded = [];
 await post(mediaMsg({ mid: 61, caption: "@Helperprivatblitzbot вот скрин ошибки" }));
 check("группа: фото с @ — пересылает админу", globalThis.__forwarded.some((f) => f.chat_id === 42),
   JSON.stringify(globalThis.__forwarded));
@@ -602,6 +609,12 @@ sent = [];
 await post(mediaMsg({ mid: 62, chatId: 777 }));
 check("личка: фото — длинный ответ с просьбой уточнить",
   /Скриншот получил/.test((sent.filter((x) => x.chat_id === 777).map((x) => x.text || "").slice(-1)[0] || "")));
+
+sent = [];
+await post(msg("to create CoreCLR, 0x8007054F при запуске", { chatId: 777 }));
+check("личка: ошибка CoreCLR — есть готовый ответ",
+  /NET Desktop Runtime/.test((sent.filter((x) => x.chat_id === 777).map((x) => x.text || "").slice(-1)[0] || "")),
+  JSON.stringify(sent.map((x) => (x.text || "").slice(0, 40))));
 
 fs.unlinkSync(new URL("../tests/_worker.mjs", import.meta.url));
 
