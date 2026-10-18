@@ -139,11 +139,20 @@ async function isSubscribed(env, userId) {
   if (idList(env, "ADMIN_IDS").includes(userId)) return true;
   try {
     const r = await tgCall(env, "getChatMember", { chat_id: ch, user_id: userId });
-    if (!r || !r.ok) return true;
-    const st = (r.result || {}).status;
-    return st === "creator" || st === "administrator" || st === "member"
-      || (st === "restricted" && !!r.result.is_member);
+    if (r && r.ok) {
+      const st = (r.result || {}).status;
+      return st === "creator" || st === "administrator" || st === "member"
+        || (st === "restricted" && !!r.result.is_member);
+    }
+    const desc = String((r && r.description) || "");
+    // "Participant not found" — человека в канале нет. Это и есть «не подписан»,
+    // раньше мы ошибочно считали это «проверить нельзя» и пускали без подписки.
+    if (/PARTICIPANT_ID_INVALID|participant_id_invalid|user not found/i.test(desc)) return false;
+    // Остальное (бот не админ, канал недоступен) — не наказываем людей.
+    return true;
   } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/PARTICIPANT_ID_INVALID|participant_id_invalid|user not found/i.test(msg)) return false;
     return true;
   }
 }
