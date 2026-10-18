@@ -320,7 +320,7 @@ async function handleMessage(env, msg) {
       if (!rel.tag) return { text: "Не смог узнать версию — GitHub не ответил. Попробуй через минуту." };
       return {
         replyTo: msg.message_id,
-        text: `Последняя версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}\n\nЗаплатка (0.6 МБ, в Download, потом перезапуск):\n${rel.hotfix}`,
+        text: `Последняя версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`,
       };
     }
     if (["issues", "problems", "known"].includes(cmd)) return { text: knownList(), replyTo: msg.message_id };
