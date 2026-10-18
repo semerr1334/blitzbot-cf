@@ -676,10 +676,11 @@ export default {
       if (url.searchParams.get("set") === "1") {
         if (!secret) return new Response("Сначала задай WEBHOOK_SECRET в настройках Worker.", { status: 400 });
         const target = `${url.origin}${url.pathname}`;
+        // callback_query обязателен: без него нажатия на кнопки до бота не доходят
         const r = await tgCall(env, "setWebhook", {
           url: target,
           secret_token: secret,
-          allowed_updates: ["message", "edited_message"],
+          allowed_updates: ["message", "edited_message", "callback_query"],
         });
         return new Response(JSON.stringify(r, null, 1), { headers: { "content-type": "application/json" } });
       }
