@@ -25,6 +25,7 @@ const ENV = {
 
 let sent = [];
 let lastDownloadLink = "";
+globalThis.__deletedMsgs = [];
 
 // --- фейковая сеть ---------------------------------------------------------
 globalThis.caches = {
@@ -44,6 +45,10 @@ globalThis.fetch = async (url, init = {}) => {
     if (u.endsWith("/sendMessage")) {
       sent.push(body);
       return new Response(JSON.stringify({ ok: true, result: {} }), { status: 200 });
+    }
+    if (u.endsWith("/deleteMessage")) {
+      globalThis.__deletedMsgs.push(body);
+      return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
     }
     return new Response(JSON.stringify({ ok: true, result: true }), { status: 200 });
   }
@@ -80,8 +85,8 @@ function groupMsg(text, { chatId = -1004462409893, userId = 5, username = "playe
     chat: { id: chatId, title: "Поболтушки", type: "supergroup" }, text } };
 }
 
-function callback(data, { chatId = 777, userId = 1 } = {}) {
-  return { update_id: 2, callback_query: { id: "cb1", data, from: { id: userId }, message: { message_id: 99, chat: { id: chatId } } } };
+function callback(data, { chatId = 777, userId = 1, messageId = 99 } = {}) {
+  return { update_id: 2, callback_query: { id: "cb1", data, from: { id: userId }, message: { message_id: messageId, chat: { id: chatId } } } };
 }
 
 function msg(text, { chatId = 777, userId = 1, mid = 10, username = "tester", isBot = false } = {}) {
@@ -393,7 +398,10 @@ await post({
 });
 const toUser = sent.filter((x) => x.chat_id === 777).map((x) => x.text || "").slice(-1)[0] || "";
 check("админ: ответ реплаем уходит человеку", /Ответ разработчика/.test(toUser) && /модель телефона/.test(toUser), toUser.slice(0, 80));
-check("админ: подтверждение отправки", /Отправлено/.test((sent.filter((x) => x.chat_id === 42).map((x) => x.text || "").slice(-1)[0] || "")));
+check("админ: подтверждение отправки", /Отправил/.test((sent.filter((x) => x.chat_id === 42).map((x) => x.text || "").slice(-1)[0] || "")));
+check("админ: уведомление исчезло после ответа",
+  globalThis.__deletedMsgs.some((d) => d.chat_id === 42 && d.message_id === 99),
+  JSON.stringify(globalThis.__deletedMsgs));
 
 // /reply <id> <текст>
 sent = [];
@@ -434,6 +442,7 @@ check("старое уведомление: человеку ничего не �
 
 // --- упрощённый ответ: кнопка «Ответить» ---
 globalThis.__forceReply = null;
+globalThis.__deletedMsgs = [];
 globalThis.fetch = ((orig) => async (url, init) => {
   const body = init && init.body ? JSON.parse(init.body) : {};
   if (String(url).endsWith("/sendMessage") && body.reply_markup && body.reply_markup.force_reply) {
@@ -464,11 +473,28 @@ await post({
   message: {
     message_id: 200, from: { id: 42, username: "admin" }, chat: { id: 42 },
     text: "Поставь v6.59 и напиши, что стало",
-    reply_to_message: { message_id: 150, from: { id: 999, is_bot: true }, text: "Напиши ответ — отправлю человеку в чат 777.\n\n#r=777" },
+    reply_to_message: { message_id: 150, from: { id: 999, is_bot: true }, text: "Напиши ответ — отправлю человеку в чат 777.\n\n#r=777 #n=140" },
   },
 });
 check("печатаешь в поле — уходит человеку", /Поставь v6.59/.test((sent.filter((x) => x.chat_id === 777).map((x) => x.text || "").slice(-1)[0] || "")), JSON.stringify(sent.map((x) => x.chat_id)));
-check("печатаешь в поле — тебе приходит подтверждение", /Отправлено/.test((sent.filter((x) => x.chat_id === 42).map((x) => x.text || "").slice(-1)[0] || "")));
+check("печатаешь в поле — тебе приходит подтверждение", /Отправил/.test((sent.filter((x) => x.chat_id === 42).map((x) => x.text || "").slice(-1)[0] || "")));
+check("печатаешь в поле — уведомление и поле ввода убраны",
+  globalThis.__deletedMsgs.some((d) => d.message_id === 140) && globalThis.__deletedMsgs.some((d) => d.message_id === 150),
+  JSON.stringify(globalThis.__deletedMsgs));
+
+// «Оставить — надо чинить»: уведомление остаётся, кнопки сохраняются
+globalThis.__edited = null;
+globalThis.fetch = ((orig) => async (url, init) => {
+  if (String(url).endsWith("/editMessageText")) { globalThis.__edited = JSON.parse(init.body || "{}"); }
+  return orig(url, init);
+})(globalThis.fetch);
+globalThis.__deletedMsgs = [];
+await post(callback("rw:777", { userId: 42, chatId: 42, messageId: 140 }));
+check("кнопка «В работе»: уведомление не удаляют", globalThis.__deletedMsgs.length === 0, JSON.stringify(globalThis.__deletedMsgs));
+check("кнопка «В работе»: помечено и остались кнопки ответа",
+  !!globalThis.__edited && /В работе/.test(globalThis.__edited.text || "")
+  && (((globalThis.__edited.reply_markup || {}).inline_keyboard || []).flat()).some((b) => /Ответить/.test(b.text)),
+  JSON.stringify(globalThis.__edited || {}).slice(0, 160));
 
 // «Закрыть» убирает уведомление
 globalThis.__deleted = false;
