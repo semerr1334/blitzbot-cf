@@ -80,6 +80,20 @@ async function tgCall(env, method, params) {
   return r.json();
 }
 
+function apkKeyboard(rel) {
+  const rows = [];
+  if (rel && rel.apk) rows.push([{ text: "⬇️ Скачать АПК", url: rel.apk }]);
+  rows.push([{ text: "🆕 Что нового", callback_data: "b:new" },
+             { text: "📋 Все темы", callback_data: "b:all" }]);
+  return rows;
+}
+
+// Убираем голую ссылку из текста: она рвётся на строки и выглядит как мусор.
+function stripApk(text, rel) {
+  if (!rel || !rel.apk) return text;
+  return text.split(rel.apk).join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function isAdminUser(env, userId) {
   const admins = idList(env, "ADMIN_IDS");
   return !admins.length || admins.includes(userId);
@@ -98,7 +112,7 @@ function menuKeyboard() {
 
 function whatsNewText(rel) {
   if (!rel.tag) return "Не смог узнать версию — GitHub не ответил. Попробуй через минуту.";
-  if (!rel.body) return `Актуальная версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`;
+  if (!rel.body) return `Актуальная версия: ${rel.tag}\n\nСтавить сверху, игру не удалять.`;
   // Markdown релиза -> читаемый текст: заголовки, звёздочки и ссылки убираем
   let body = rel.body
     .replace(/\r/g, "")
@@ -442,7 +456,8 @@ async function handleMessage(env, msg) {
       }
       return {
         replyTo: msg.message_id,
-        text: `Последняя версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`,
+        text: `Последняя версия: ${rel.tag}\n\nСтавить сверху, игру не удалять — аккаунт и танки останутся.`,
+        keyboard: apkKeyboard(rel),
       };
     }
     if (["issues", "problems", "known"].includes(cmd)) return { text: knownList(), replyTo: msg.message_id };
@@ -538,7 +553,8 @@ async function handleMessage(env, msg) {
   let answer = render(issue, text, rel);
 
   // Если в ответе есть ссылка на АПК и включён режим подписки — проверяем.
-  if (env.REQUIRE_SUB && env.CHANNEL && answer.includes(rel.apk || "\u0000")) {
+  const wantsApk = !!rel.apk && answer.includes(rel.apk);
+  if (env.REQUIRE_SUB && env.CHANNEL && wantsApk) {
     const sub = await isSubscribed(env, userId);
     if (!sub) {
       return { text: gateText(env), replyTo: msg.message_id, keyboard: gateKeyboard(env) };
@@ -550,7 +566,12 @@ async function handleMessage(env, msg) {
   const esc = regression || issue.status === "open" || !!issue.severe
     ? { text, ask: issue.ask || "", chat, user }
     : null;
-  return { text: answer, replyTo: msg.message_id, escalate: esc };
+  return {
+    text: wantsApk ? stripApk(answer, rel) : answer,
+    replyTo: msg.message_id,
+    keyboard: wantsApk ? apkKeyboard(rel) : null,
+    escalate: esc,
+  };
 }
 
 async function escalate(env, ev) {
@@ -627,7 +648,9 @@ async function handleCallback(env, cq) {
       const userId = ((cq.from || {}).id) || 0;
       if (await isSubscribed(env, userId)) {
         const rel = await latestRelease(env);
-        await send(env, chatId, `Готово ✅\n\nПоследняя версия: ${rel.tag}\n\nАПК (ставить сверху, игру не удалять):\n${rel.apk}`);
+        await send(env, chatId,
+          `Готово ✅\n\nПоследняя версия: ${rel.tag}\n\nСтавить сверху, игру не удалять.`,
+          null, apkKeyboard(rel));
       } else {
         await send(env, chatId, "Пока не вижу подписки.\n\nПодпишись на канал и нажми «Я подписался» ещё раз.",
           null, gateKeyboard(env));
