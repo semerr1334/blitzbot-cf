@@ -461,7 +461,7 @@ async function handleMessage(env, msg) {
 
   const botUsername = String(env.BOT_USERNAME || "Helperprivatblitzbot").replace(/^@/, "").toLowerCase();
   const isGroup = chat.type === "group" || chat.type === "supergroup";
-  const addressed = addressedToBot(msg, text, botUsername);
+  let addressed = addressedToBot(msg, text, botUsername);
   if (isGroup && addressed) {
     text = text.replace(new RegExp("@" + botUsername, "ig"), "").trim();
   }
@@ -476,6 +476,7 @@ async function handleMessage(env, msg) {
 
   const m = text.match(/^\/([A-Za-z_]+)(?:@\w+)?\s*([\s\S]*)$/);
   if (m) {
+    addressed = true;   // команда — обращение к боту, даже без @
     const cmd = m[1].toLowerCase();
     const arg = (m[2] || "").trim();
     if (["start", "help", "menu"].includes(cmd)) {
@@ -580,9 +581,9 @@ async function handleMessage(env, msg) {
 
   // В ГРУППЕ МОЛЧИМ, если это не команда, не @обращение и не явный вопрос по теме.
   // Иначе бот превращается в спам: отвечает на «Ок», «Эмм», «Походу».
-  if (isGroup && !addressed) {
-    if (isNoise(text)) return null;
-    if (!issue || score < 5) return null;
+  if (isGroup) {
+    if (isNoise(text)) return null;                     // «Ок», «Эмм», «Походу» — даже если позвали
+    if (!addressed && (!issue || score < 5)) return null;
   }
 
   if (!issue) {
