@@ -253,7 +253,7 @@ function gateText(env) {
 
 async function latestRelease(env) {
   const cache = caches.default;
-  const key = new Request("https://cache.local/release", { method: "GET" });
+  const key = new Request("https://cache.local/release?k=663", { method: "GET" });
   try {
     const hit = await cache.match(key);
     if (hit) return await hit.json();
@@ -286,7 +286,7 @@ async function latestRelease(env) {
     // кэшируем только удачный ответ, иначе пустышка залипнет на 10 минут
     try {
       await cache.put(key, new Response(JSON.stringify(info), {
-        headers: { "content-type": "application/json", "cache-control": "max-age=600" },
+        headers: { "content-type": "application/json", "cache-control": "max-age=120" },
       }));
     } catch (e) {}
   }
