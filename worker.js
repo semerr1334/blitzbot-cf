@@ -486,9 +486,20 @@ async function handleMessage(env, msg) {
 
   // --- админ отвечает человеку, нажав «ответить» на уведомление ---
   const replied = msg.reply_to_message;
-  if (isAdmin && replied && (replied.from || {}).is_bot) {
+  if (isAdmin && replied && (replied.from || {}).is_bot && !text.startsWith("/")) {
     const src = String(replied.text || replied.caption || "");
     const mm = src.match(/#r=(-?\d+)/);
+    if (!mm) {
+      // Старое уведомление без метки (или бот писал что-то другое).
+      return {
+        text: "Не понял, кому это отправить: в этом сообщении бота нет метки чата "
+          + "(так бывает у уведомлений, отправленных до обновления).\n\n"
+          + "Ответь на НОВОЕ уведомление, или напиши командой:\n"
+          + "/reply <chat_id> текст\n\n"
+          + "chat_id виден в уведомлении в скобках, например (8225134165).",
+        replyTo: msg.message_id,
+      };
+    }
     if (mm) {
       const target = parseInt(mm[1], 10);
       const clean = text.replace(/^\/reply\s+/, "").trim();
