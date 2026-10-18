@@ -16,7 +16,7 @@ const KB = {"issues":[{"id":"where-download","title":"Где скачать мо
 
 // Запасной вариант, если GitHub API недоступен или упёрлись в лимит:
 // сборка кладёт сюда ссылки последнего релиза на момент сборки.
-const FALLBACK_RELEASE = {"tag": "v6.61", "apk": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.61/WoT_Blitz_11.20.0_Server_v661.apk", "hotfix": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.61/blitz_hotfix_661.zip"};
+const FALLBACK_RELEASE = {"tag": "v6.62", "apk": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.62/WoT_Blitz_11.20.0_Server_v662.apk", "hotfix": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.62/blitz_hotfix_662.zip"};
 
 const TG = (token, method) => `https://api.telegram.org/bot${token}/${method}`;
 const MSK_OFFSET = 3 * 3600 * 1000;
