@@ -813,7 +813,7 @@ export default {
       if (url.searchParams.get("info") === "1") {
         const rel = await latestRelease(env);
         return new Response(
-          `BlitzBot worker\nbuild: 6.64 (скрин с подписью — тихо админу; новая тема CoreCLR)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
+          `BlitzBot worker\nbuild: 6.65 (тема CoreCLR: отдельно ПК и телефон)\nrelease: ${rel.tag || "?"}\nissues: ${KB.issues.length}\n` +
           `webhook secret: ${secret ? "set" : "НЕ ЗАДАН"}\n` +
           `chat filter: ${idList(env, "ALLOWED_CHAT_IDS").join(",") || "любой"}\n` +
           `admins: ${idList(env, "ADMIN_IDS").join(",") || "не заданы"}\n` +
