@@ -16,7 +16,7 @@ const KB = {"issues":[{"id":"battle-crash","title":"Вылетает в бою �
 
 // Запасной вариант, если GitHub API недоступен или упёрлись в лимит:
 // сборка кладёт сюда ссылки последнего релиза на момент сборки.
-const FALLBACK_RELEASE = {"tag": "v6.64", "apk": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.64/WoT_Blitz_11.20.0_Server_v664.apk"};
+const FALLBACK_RELEASE = {"tag": "v6.65", "apk": "https://github.com/semerr1334/BlitzRelease1120/releases/download/v6.65/WoT_Blitz_11.20.0_Server_v665.apk"};
 
 const TG = (token, method) => `https://api.telegram.org/bot${token}/${method}`;
 const MSK_OFFSET = 3 * 3600 * 1000;
